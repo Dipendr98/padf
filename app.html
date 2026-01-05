@@ -744,6 +744,63 @@
           }
         }, [numPages, rendered, renderingPage, error]);
 
+        // Page navigation handlers
+        const handlePageChange = useCallback(async (newPage) => {
+          if (newPage < 1 || newPage > numPages || newPage === currentPage) {
+            console.log(`[PdfViewer] Page change ignored: ${newPage} (current: ${currentPage}, total: ${numPages})`);
+            return;
+          }
+
+          if (renderingPage) {
+            console.log(`[PdfViewer] Page change blocked - already rendering`);
+            return;
+          }
+
+          console.log(`[PdfViewer] Navigating to page ${newPage}`);
+          onClosePopup();
+
+          const success = await renderPage(newPage);
+
+          if (success) {
+            setCurrentPage(newPage);
+            console.log(`[PdfViewer] Successfully navigated to page ${newPage}`);
+          }
+        }, [numPages, currentPage, renderingPage, onClosePopup, renderPage]);
+
+        const handleNextPage = useCallback(() => {
+          if (!renderingPage && currentPage < numPages) {
+            console.log('[PdfViewer] Next button clicked');
+            handlePageChange(currentPage + 1);
+          }
+        }, [currentPage, numPages, renderingPage, handlePageChange]);
+
+        const handlePrevPage = useCallback(() => {
+          if (!renderingPage && currentPage > 1) {
+            console.log('[PdfViewer] Prev button clicked');
+            handlePageChange(currentPage - 1);
+          }
+        }, [currentPage, renderingPage, handlePageChange]);
+
+        // Keyboard navigation
+        useEffect(() => {
+          if (!rendered || numPages === 0) return;
+
+          const handleKeyDown = (e) => {
+            if (renderingPage) return;
+
+            if (e.key === 'ArrowLeft' && currentPage > 1) {
+              e.preventDefault();
+              handlePrevPage();
+            } else if (e.key === 'ArrowRight' && currentPage < numPages) {
+              e.preventDefault();
+              handleNextPage();
+            }
+          };
+
+          window.addEventListener('keydown', handleKeyDown);
+          return () => window.removeEventListener('keydown', handleKeyDown);
+        }, [rendered, numPages, currentPage, renderingPage, handlePrevPage, handleNextPage]);
+
         const handleTextLayerClick = useCallback((event) => {
           if (renderingPage || !hasTextLayer) {
             console.log('[PdfViewer] Click ignored:', { renderingPage, hasTextLayer });
@@ -873,6 +930,28 @@
                   </span>
                 )}
               </div>
+
+              {rendered && numPages > 1 && (
+                <div className="flex items-center justify-center gap-2 mt-3">
+                  <button
+                    onClick={handlePrevPage}
+                    disabled={currentPage === 1 || renderingPage}
+                    className="px-3 py-1 bg-blue-500 text-white rounded disabled:bg-gray-300 disabled:cursor-not-allowed hover:bg-blue-600 transition-colors text-sm"
+                  >
+                    ← Previous
+                  </button>
+                  <span className="text-sm font-medium text-gray-700">
+                    Page {currentPage} of {numPages}
+                  </span>
+                  <button
+                    onClick={handleNextPage}
+                    disabled={currentPage === numPages || renderingPage}
+                    className="px-3 py-1 bg-blue-500 text-white rounded disabled:bg-gray-300 disabled:cursor-not-allowed hover:bg-blue-600 transition-colors text-sm"
+                  >
+                    Next →
+                  </button>
+                </div>
+              )}
             </div>
           </section>
         );
