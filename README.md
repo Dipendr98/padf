@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Smart PDF Reader
 
 A pure static React + TypeScript application for interactive PDF reading with word definitions. **No npm dependencies required** - uses PDF.js from CDN.
@@ -239,3 +240,6 @@ Notes:
 ---
 
 If you want, I can also add a short `CONTRIBUTING.md` and a trimmed `CHANGELOG.md` before you push — tell me if you'd like that.
+=======
+# padf
+>>>>>>> 327423432236ca474e83708ff0f080f6105cb721
