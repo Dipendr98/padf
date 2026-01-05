@@ -1,0 +1,1000 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Smart PDF Reader</title>
+    
+    <!-- React & ReactDOM from CDN -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    
+    <!-- Babel for JSX transformation -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Tailwind CSS from CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- PDF.js from CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script>
+      if (window.pdfjsLib) {
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+          'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      }
+    </script>
+    
+    <!-- Text Layer CSS for PDF.js -->
+    <style>
+      .textLayer {
+        position: absolute;
+        left: 0;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        overflow: hidden;
+        opacity: 0.2;
+        line-height: 1;
+        -webkit-text-size-adjust: none;
+        -moz-text-size-adjust: none;
+        text-size-adjust: none;
+      }
+
+      .textLayer span,
+      .textLayer br {
+        color: transparent;
+        position: absolute;
+        white-space: pre;
+        cursor: text;
+        transform-origin: 0% 0%;
+      }
+
+      .textLayer span.markedContent {
+        top: 0;
+        left: 0;
+      }
+
+      .textLayer .highlight {
+        margin: -1px;
+        padding: 1px;
+        background-color: rgb(180, 0, 170);
+        color: transparent;
+      }
+
+      .textLayer .highlight.begin {
+        border-radius: 4px 0px 0px 4px;
+      }
+
+      .textLayer .highlight.end {
+        border-radius: 0px 4px 4px 0px;
+      }
+
+      .textLayer .highlight.middle {
+        border-radius: 0px;
+      }
+
+      .textLayer .highlight.selected {
+        background-color: rgb(0, 100, 0);
+      }
+
+      .textLayer ::selection {
+        background: rgb(0, 0, 255);
+      }
+
+      .textLayer ::-moz-selection {
+        background: rgb(0, 0, 255);
+      }
+
+      .textLayer br::selection {
+        background: transparent;
+      }
+
+      .textLayer br::-moz-selection {
+        background: transparent;
+      }
+
+      .textLayer .endOfContent {
+        display: block;
+        position: absolute;
+        left: 0px;
+        top: 100%;
+        right: 0px;
+        bottom: 0px;
+        z-index: -1;
+        cursor: text;
+        user-select: none;
+        -webkit-user-select: none;
+        -moz-user-select: none;
+      }
+
+      .textLayer .endOfContent::before {
+        content: '';
+        display: block;
+        position: absolute;
+        left: 0px;
+        top: 0px;
+        right: 0px;
+        bottom: 0px;
+        z-index: 1;
+      }
+
+      body {
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+          'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+          sans-serif;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    
+    <script type="text/babel">
+      const { useState, useEffect, useRef, useCallback } = React;
+
+      // ========== Dictionary API ==========
+      const dictionaryCache = new Map();
+
+      function normalizeWord(word) {
+        const normalized = word.toLowerCase().trim().replace(/[^a-z]/g, '');
+        if (normalized.length < 2 || !/^[a-z]+$/.test(normalized)) {
+          return null;
+        }
+        return normalized;
+      }
+
+      async function fetchDefinition(word) {
+        const normalizedWord = normalizeWord(word);
+        if (!normalizedWord) {
+          console.log('[Dictionary] Invalid word, skipping:', word);
+          throw new Error('Invalid word format');
+        }
+
+        console.log('[Dictionary] Fetching definition for:', normalizedWord);
+
+        if (dictionaryCache.has(normalizedWord)) {
+          console.log('[Dictionary] Using cached result for:', normalizedWord);
+          return dictionaryCache.get(normalizedWord);
+        }
+
+        try {
+          const url = `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(normalizedWord)}`;
+          console.log('[Dictionary] Fetching from API:', url);
+
+          const response = await fetch(url);
+
+          if (!response.ok) {
+            if (response.status === 404) {
+              console.log('[Dictionary] Word not found (404):', normalizedWord);
+              const errorData = {
+                word: normalizedWord,
+                definition: `Meaning not available for '${normalizedWord}'`,
+                error: 'not_found',
+              };
+              dictionaryCache.set(normalizedWord, errorData);
+              return errorData;
+            }
+            throw new Error(`HTTP error ${response.status}`);
+          }
+
+          const data = await response.json();
+          console.log('[Dictionary] API response received for:', normalizedWord);
+
+          const firstEntry = data[0];
+          const firstMeaning = firstEntry?.meanings?.[0];
+          const firstDefinition = firstMeaning?.definitions?.[0];
+
+          const phonetic = firstEntry?.phonetic ||
+                          firstEntry?.phonetics?.find(p => p.text)?.text ||
+                          '';
+
+          const example = firstDefinition?.example || undefined;
+          const definition = firstDefinition?.definition || 'No definition available';
+
+          const result = {
+            word: normalizedWord,
+            phonetic: phonetic || undefined,
+            definition,
+            example,
+          };
+
+          console.log('[Dictionary] Caching result for:', normalizedWord);
+          dictionaryCache.set(normalizedWord, result);
+          return result;
+        } catch (error) {
+          console.error('[Dictionary] Error fetching definition:', error);
+          const errorData = {
+            word: normalizedWord,
+            definition: `Unable to fetch meaning for '${normalizedWord}'`,
+            error: error instanceof Error ? error.message : 'network_error',
+          };
+          return errorData;
+        }
+      }
+
+      // ========== PDF Loader ==========
+      async function waitForPdfJs(timeoutMs = 10000) {
+        const startTime = Date.now();
+        while (!window.pdfjsLib) {
+          if (Date.now() - startTime > timeoutMs) {
+            throw new Error(
+              'PDF.js library failed to load from CDN. Please check your internet connection and reload the page.'
+            );
+          }
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+        return window.pdfjsLib;
+      }
+
+      async function loadPdfDocument(data) {
+        const pdfjsLib = await waitForPdfJs();
+        if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
+          pdfjsLib.GlobalWorkerOptions.workerSrc =
+            'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        }
+        const loadingTask = pdfjsLib.getDocument({ data });
+        return await loadingTask.promise;
+      }
+
+      // ========== Components ==========
+      function Header() {
+        return (
+          <header className="bg-white shadow-sm border-b border-gray-200">
+            <div className="mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8 py-4 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="w-10 h-10 bg-blue-500 rounded-lg flex items-center justify-center text-white text-2xl">
+                  📄
+                </div>
+                <h1 className="text-xl font-bold text-gray-900">Smart PDF Reader</h1>
+              </div>
+            </div>
+          </header>
+        );
+      }
+
+      function UploadZone({ onFileSelect }) {
+        const [isDragging, setIsDragging] = useState(false);
+
+        const handleFile = useCallback(
+          (file) => {
+            if (!file.type.includes('pdf')) {
+              alert('Please upload a valid PDF file');
+              return;
+            }
+            onFileSelect(file);
+          },
+          [onFileSelect]
+        );
+
+        const handleDrop = useCallback(
+          (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setIsDragging(false);
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+              handleFile(files[0]);
+            }
+          },
+          [handleFile]
+        );
+
+        const handleDragOver = useCallback((e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setIsDragging(true);
+        }, []);
+
+        const handleDragLeave = useCallback((e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setIsDragging(false);
+        }, []);
+
+        const handleInputChange = useCallback(
+          (e) => {
+            const files = e.target.files;
+            if (files && files.length > 0) {
+              handleFile(files[0]);
+            }
+          },
+          [handleFile]
+        );
+
+        const handleClick = useCallback(() => {
+          document.getElementById('pdf-file-input')?.click();
+        }, []);
+
+        return (
+          <section className="mb-8">
+            <div
+              onDrop={handleDrop}
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onClick={handleClick}
+              className={`bg-white rounded-lg border-2 border-dashed p-8 text-center transition-colors cursor-pointer ${
+                isDragging
+                  ? 'border-blue-500 bg-blue-50'
+                  : 'border-blue-300 hover:border-blue-500'
+              }`}
+            >
+              <input
+                id="pdf-file-input"
+                type="file"
+                accept="application/pdf,.pdf"
+                onChange={handleInputChange}
+                className="hidden"
+              />
+              <div className="mb-4 text-4xl">📤</div>
+              <h2 className="text-lg font-semibold text-gray-900 mb-2">Upload PDF</h2>
+              <p className="text-gray-600 text-sm mb-4">
+                Click to select or drag and drop your PDF file here
+              </p>
+              <div className="inline-block bg-blue-500 hover:bg-blue-600 text-white font-medium py-2 px-6 rounded-lg transition-colors pointer-events-none">
+                Choose File
+              </div>
+              <p className="text-gray-500 text-xs mt-4">Supported format: PDF</p>
+            </div>
+          </section>
+        );
+      }
+
+      function DefinitionPopup({ visible, x, y, word, loading, data, error, onClose }) {
+        const popupRef = useRef(null);
+
+        useEffect(() => {
+          if (!visible) return;
+
+          const handleClickOutside = (e) => {
+            if (popupRef.current && !popupRef.current.contains(e.target)) {
+              onClose();
+            }
+          };
+
+          const handleEscape = (e) => {
+            if (e.key === 'Escape') {
+              onClose();
+            }
+          };
+
+          document.addEventListener('mousedown', handleClickOutside);
+          document.addEventListener('keydown', handleEscape);
+
+          return () => {
+            document.removeEventListener('mousedown', handleClickOutside);
+            document.removeEventListener('keydown', handleEscape);
+          };
+        }, [visible, onClose]);
+
+        useEffect(() => {
+          if (!visible || !popupRef.current) return;
+
+          const popup = popupRef.current;
+          const rect = popup.getBoundingClientRect();
+          const viewportWidth = window.innerWidth;
+          const viewportHeight = window.innerHeight;
+
+          let adjustedX = x;
+          let adjustedY = y;
+
+          if (x + rect.width > viewportWidth - 16) {
+            adjustedX = viewportWidth - rect.width - 16;
+          }
+
+          if (y + rect.height > viewportHeight - 16) {
+            adjustedY = Math.max(16, y - rect.height - 16);
+          }
+
+          popup.style.left = `${adjustedX}px`;
+          popup.style.top = `${adjustedY}px`;
+        }, [visible, x, y, data, loading]);
+
+        if (!visible) return null;
+
+        return (
+          <>
+            <div className="fixed inset-0 bg-black bg-opacity-20 z-40" />
+            <div
+              ref={popupRef}
+              className="fixed w-72 bg-white rounded-lg shadow-2xl border border-gray-200 z-50 transition-opacity duration-200"
+              style={{ left: x, top: y }}
+            >
+              <div className="bg-gradient-to-r from-blue-500 to-blue-600 text-white px-4 py-3 rounded-t-lg flex justify-between items-center">
+                <span className="font-bold text-lg">{word}</span>
+                <button
+                  onClick={onClose}
+                  className="text-white hover:bg-blue-700 rounded p-1 transition-colors"
+                  aria-label="Close"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="p-4 space-y-3">
+                {loading && (
+                  <div className="flex items-center justify-center py-4">
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500" />
+                  </div>
+                )}
+
+                {!loading && data && (
+                  <>
+                    {data.phonetic && (
+                      <p className="text-sm text-gray-500 italic">{data.phonetic}</p>
+                    )}
+                    <p className="text-sm text-gray-700">{data.definition}</p>
+                    {data.example && (
+                      <p className="text-xs text-gray-600 border-l-2 border-blue-300 pl-2 italic">
+                        "{data.example}"
+                      </p>
+                    )}
+                  </>
+                )}
+
+                {error && (
+                  <p className="text-sm text-red-600">{error}</p>
+                )}
+              </div>
+            </div>
+          </>
+        );
+      }
+
+      function InfoSection() {
+        return (
+          <section className="mt-8 bg-blue-50 rounded-lg border border-blue-200 p-6">
+            <h3 className="font-semibold text-blue-900 mb-2 flex items-center gap-2">
+              <span>ℹ️</span>
+              <span>How it works</span>
+            </h3>
+            <ul className="text-sm text-blue-800 space-y-1 list-disc list-inside">
+              <li>Upload a PDF file using the upload area above</li>
+              <li>The first page will render with an interactive text layer</li>
+              <li>Tap or click any word to see its English definition</li>
+              <li>Popup appears near your cursor with definition from Dictionary API</li>
+              <li>Click outside to close the popup</li>
+            </ul>
+          </section>
+        );
+      }
+
+      function PdfViewer({ file, onWordClick, onClosePopup }) {
+        const canvasRef = useRef(null);
+        const textLayerRef = useRef(null);
+        const containerRef = useRef(null);
+        const [loading, setLoading] = useState(false);
+        const [error, setError] = useState(null);
+        const [rendered, setRendered] = useState(false);
+        const [currentPage, setCurrentPage] = useState(1);
+        const [numPages, setNumPages] = useState(0);
+        const [renderingPage, setRenderingPage] = useState(false);
+        const [hasTextLayer, setHasTextLayer] = useState(true);
+        const [noTextForPage, setNoTextForPage] = useState(false);
+        const [showDebug, setShowDebug] = useState(true);
+
+        const pdfDocRef = useRef(null);
+        const pdfPageRef = useRef(null);
+        const renderTaskRef = useRef(null);
+        const resizeTimeoutRef = useRef(null);
+        const renderTokenRef = useRef(0);
+        const needsRerender = useRef(false);
+
+        const cleanup = useCallback(() => {
+          if (renderTaskRef.current) {
+            try {
+              renderTaskRef.current.cancel();
+            } catch (e) {}
+            renderTaskRef.current = null;
+          }
+          if (pdfPageRef.current) {
+            try {
+              pdfPageRef.current.cleanup();
+            } catch (e) {}
+            pdfPageRef.current = null;
+          }
+        }, []);
+
+        const cleanupDoc = useCallback(() => {
+          cleanup();
+          if (pdfDocRef.current) {
+            try {
+              pdfDocRef.current.destroy();
+            } catch (e) {}
+            pdfDocRef.current = null;
+          }
+        }, [cleanup]);
+
+        useEffect(() => {
+          if (!file) {
+            cleanupDoc();
+            setRendered(false);
+            setError(null);
+            setCurrentPage(1);
+            setNumPages(0);
+            setHasTextLayer(false);
+            setNoTextForPage(false);
+            return;
+          }
+
+          const loadPdf = async () => {
+            setLoading(true);
+            setError(null);
+            setRendered(false);
+            cleanupDoc();
+
+            try {
+              if (!file.type.includes('pdf')) {
+                throw new Error('Invalid file type. Please upload a PDF file.');
+              }
+
+              const arrayBuffer = await new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result);
+                reader.onerror = () => reject(new Error('Failed to read file'));
+                reader.readAsArrayBuffer(file);
+              });
+
+              const pdfDoc = await loadPdfDocument(arrayBuffer);
+              pdfDocRef.current = pdfDoc;
+              setNumPages(pdfDoc.numPages);
+              setCurrentPage(1);
+              
+              // Render first page will be called after state updates
+            } catch (err) {
+              console.error('PDF loading error:', err);
+              if (err instanceof Error && err.message.includes('PDF.js library failed')) {
+                setError(
+                  'PDF.js library failed to load from CDN. Please check your internet connection and reload the page.'
+                );
+              } else {
+                setError(err instanceof Error ? err.message : 'Failed to load PDF');
+              }
+            } finally {
+              setLoading(false);
+            }
+          };
+
+          loadPdf();
+
+          return () => {
+            cleanupDoc();
+            if (resizeTimeoutRef.current) {
+              clearTimeout(resizeTimeoutRef.current);
+            }
+          };
+        }, [file, cleanupDoc]);
+
+        const renderTextLayer = useCallback(async (page, viewport) => {
+          const textLayer = textLayerRef.current;
+          if (!textLayer) return;
+
+          while (textLayer.firstChild) {
+            textLayer.removeChild(textLayer.firstChild);
+          }
+
+          try {
+            const textContent = await page.getTextContent();
+            console.log('[PdfViewer] Text content items:', textContent.items.length);
+
+            if (!textContent.items || textContent.items.length === 0) {
+              console.warn('[PdfViewer] No text content items found - page may be scanned');
+              setNoTextForPage(true);
+              setHasTextLayer(false);
+              return;
+            }
+
+            setNoTextForPage(false);
+
+            if (window.pdfjsLib && window.pdfjsLib.renderTextLayer) {
+              await window.pdfjsLib.renderTextLayer({
+                textContentSource: textContent,
+                container: textLayer,
+                viewport: viewport,
+                textDivs: [],
+              }).promise;
+
+              const childCount = textLayer.children.length;
+              console.log('[PdfViewer] Text layer rendered with', childCount, 'children');
+              setHasTextLayer(true);
+            } else {
+              console.warn('[PdfViewer] renderTextLayer API not available');
+              setNoTextForPage(true);
+              setHasTextLayer(false);
+            }
+          } catch (err) {
+            console.error('[PdfViewer] Text layer rendering error:', err);
+            setNoTextForPage(true);
+            setHasTextLayer(false);
+          }
+        }, []);
+
+        const renderPage = useCallback(async (pageNum) => {
+          const canvas = canvasRef.current;
+          const textLayer = textLayerRef.current;
+          const pdfDoc = pdfDocRef.current;
+
+          if (!canvas) {
+            console.log(`[PdfViewer] Render aborted - missing canvas for page ${pageNum}`);
+            return false;
+          }
+
+          if (!pdfDoc) {
+            console.log(`[PdfViewer] Render aborted - missing pdfDoc for page ${pageNum}`);
+            return false;
+          }
+
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            console.log(`[PdfViewer] Render aborted - canvas.getContext('2d') returned null for page ${pageNum}`);
+            return false;
+          }
+
+          renderTokenRef.current += 1;
+          const localToken = renderTokenRef.current;
+
+          console.log(`[PdfViewer] Starting render page ${pageNum} (token: ${localToken})`);
+
+          setRenderingPage(true);
+          cleanup();
+
+          if (textLayer) {
+            while (textLayer.firstChild) {
+              textLayer.removeChild(textLayer.firstChild);
+            }
+          }
+
+          try {
+            const page = await pdfDoc.getPage(pageNum);
+
+            if (localToken !== renderTokenRef.current) {
+              console.log(`[PdfViewer] Render cancelled (stale token: ${localToken})`);
+              return false;
+            }
+
+            pdfPageRef.current = page;
+
+            const dpr = window.devicePixelRatio || 1;
+            const viewport = page.getViewport({ scale: 1 });
+
+            console.log('[PdfViewer] Viewport:', {
+              width: viewport.width,
+              height: viewport.height,
+              dpr: dpr
+            });
+
+            canvas.width = Math.floor(viewport.width * dpr);
+            canvas.height = Math.floor(viewport.height * dpr);
+            canvas.style.width = `${viewport.width}px`;
+            canvas.style.height = `${viewport.height}px`;
+
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+            const renderContext = {
+              canvasContext: ctx,
+              viewport: viewport,
+            };
+
+            const renderTask = page.render(renderContext);
+            renderTaskRef.current = renderTask;
+
+            await renderTask.promise;
+            renderTaskRef.current = null;
+
+            if (localToken !== renderTokenRef.current) {
+              console.log(`[PdfViewer] Render cancelled after canvas (stale token: ${localToken})`);
+              return false;
+            }
+
+            console.log('[PdfViewer] Canvas rendered successfully');
+
+            await renderTextLayer(page, viewport);
+
+            if (localToken !== renderTokenRef.current) {
+              console.log(`[PdfViewer] Render cancelled after text layer (stale token: ${localToken})`);
+              return false;
+            }
+
+            setRendered(true);
+            console.log(`[PdfViewer] Page ${pageNum} render complete (token: ${localToken})`);
+            return true;
+          } catch (err) {
+            console.error('[PdfViewer] Page rendering error:', String(err), err && err.stack ? err.stack : null);
+
+            if (err && typeof err === 'object' && 'name' in err && err.name === 'RenderingCancelledException') {
+              console.log(`[PdfViewer] Render task cancelled (token: ${localToken})`);
+              return false;
+            }
+
+            if (localToken === renderTokenRef.current) {
+              const msg = err && typeof err === 'object' && 'message' in err ? err.message : 'Failed to render page';
+              setError(msg);
+            }
+            return false;
+          } finally {
+            if (localToken === renderTokenRef.current) {
+              setRenderingPage(false);
+
+              if (needsRerender.current) {
+                needsRerender.current = false;
+                console.log(`[PdfViewer] Triggering queued rerender for page ${pageNum}`);
+                setTimeout(() => renderPage(pageNum), 0);
+              }
+            }
+          }
+        }, [cleanup, renderTextLayer]);
+
+        // Render first page after PDF is loaded
+        useEffect(() => {
+          console.log('[PdfViewer] Effect triggered:', { numPages, rendered, renderingPage, error, hasDoc: !!pdfDocRef.current });
+          if (numPages > 0 && !rendered && !renderingPage && !error && pdfDocRef.current) {
+            console.log('[PdfViewer] Triggering initial render for page 1');
+            renderPage(1).then(success => {
+              console.log('[PdfViewer] renderPage(1) completed:', { success });
+            }).catch(err => console.error('[PdfViewer] Initial render failed:', err));
+          } else {
+            console.log('[PdfViewer] Render skipped - conditions not met:', { 
+              numPagesOk: numPages > 0, 
+              notRendered: !rendered, 
+              notRendering: !renderingPage, 
+              noError: !error,
+              hasDoc: !!pdfDocRef.current 
+            });
+          }
+        }, [numPages, rendered, renderingPage, error]);
+
+        const handleTextLayerClick = useCallback((event) => {
+          if (renderingPage || !hasTextLayer) {
+            console.log('[PdfViewer] Click ignored:', { renderingPage, hasTextLayer });
+            return;
+          }
+
+          setTimeout(() => {
+            const selection = window.getSelection();
+            if (!selection || selection.rangeCount === 0) {
+              console.log('[PdfViewer] No selection available');
+              return;
+            }
+
+            let selectedText = selection.toString().trim();
+
+            if (!selectedText && event.target instanceof HTMLElement) {
+              selectedText = event.target.textContent?.trim() || '';
+            }
+
+            if (!selectedText) {
+              console.log('[PdfViewer] No text selected');
+              return;
+            }
+
+            const words = selectedText.split(/[\s\p{P}]+/u).filter(w => w.length > 0);
+            const firstWord = words[0] || '';
+
+            const normalized = normalizeWord(firstWord);
+
+            if (normalized) {
+              console.log('[PdfViewer] Valid word selected:', normalized);
+              onWordClick(normalized, event.pageX, event.pageY);
+
+              setTimeout(() => selection.removeAllRanges(), 100);
+            } else {
+              console.log('[PdfViewer] Invalid word ignored:', firstWord);
+            }
+          }, 10);
+        }, [renderingPage, hasTextLayer, onWordClick]);
+
+        return (
+          <section className="bg-white rounded-lg shadow-md overflow-hidden">
+            <div className="bg-gray-100 px-4 sm:px-6 py-3 border-b border-gray-200">
+              <p className="text-sm font-medium text-gray-700">
+                {rendered && numPages > 0
+                  ? `PDF Preview - Page ${currentPage} of ${numPages}`
+                  : 'PDF Preview'}
+              </p>
+            </div>
+
+            <div
+              ref={containerRef}
+              className="relative bg-gray-50 flex items-center justify-center min-h-96 overflow-auto"
+            >
+              {(loading || renderingPage) && (
+                <div className="absolute inset-0 flex items-center justify-center bg-gray-50 bg-opacity-90 z-10">
+                  <div className="flex flex-col items-center gap-3">
+                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500" />
+                    <p className="text-sm text-gray-600">
+                      {renderingPage ? `Rendering page ${currentPage}...` : 'Loading PDF...'}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {error && (
+                <div className="absolute inset-0 flex items-center justify-center p-4">
+                  <div className="bg-red-50 border border-red-200 rounded-lg p-4 max-w-md">
+                    <p className="text-red-800 text-sm font-medium mb-2">Error Loading PDF</p>
+                    <p className="text-red-700 text-sm">{error}</p>
+                    <button
+                      onClick={() => window.location.reload()}
+                      className="mt-3 text-sm text-red-600 hover:text-red-800 underline"
+                    >
+                      Reload page to retry
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {!file && !loading && !error && (
+                <div className="text-gray-500 text-sm">
+                  Upload a PDF to get started
+                </div>
+              )}
+
+              <div className="w-full max-w-4xl mx-auto p-4">
+                {rendered && noTextForPage && (
+                  <div className="mb-4 bg-yellow-50 border border-yellow-200 rounded-lg p-3 text-center">
+                    <p className="text-yellow-800 text-sm">
+                      ⚠️ Interactive text unavailable for this page. PDF may be scanned or image-based.
+                    </p>
+                  </div>
+                )}
+
+                <div
+                  className="relative inline-block mx-auto"
+                  style={{ display: rendered && file && !error ? 'block' : 'none' }}
+                >
+                  <canvas
+                    ref={canvasRef}
+                    className="shadow-lg rounded-sm"
+                  />
+                  {hasTextLayer && (
+                    <div
+                      ref={textLayerRef}
+                      className="textLayer"
+                      onClick={handleTextLayerClick}
+                    />
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-gray-100 px-4 sm:px-6 py-3 border-t border-gray-200 text-xs text-gray-600">
+              <div className="flex flex-wrap justify-between items-center gap-2">
+                <span>
+                  {renderingPage
+                    ? `Rendering page ${currentPage}...`
+                    : rendered && numPages > 0
+                    ? `Page ${currentPage} of ${numPages} — ${hasTextLayer ? 'Click any word to see its definition' : 'No interactive text on this page'}`
+                    : 'Ready to render PDF'}
+                </span>
+                {rendered && hasTextLayer && !renderingPage && (
+                  <span className="hidden sm:inline">
+                    Text layer active • Selection-based word lookup
+                  </span>
+                )}
+              </div>
+            </div>
+          </section>
+        );
+      }
+
+      function App() {
+        const [pdfFile, setPdfFile] = useState(null);
+        const [popupState, setPopupState] = useState({
+          visible: false,
+          x: 0,
+          y: 0,
+          word: '',
+          loading: false,
+          data: null,
+          error: null,
+        });
+
+        const handleFileSelect = (file) => {
+          setPdfFile(file);
+          setPopupState({
+            visible: false,
+            x: 0,
+            y: 0,
+            word: '',
+            loading: false,
+            data: null,
+            error: null,
+          });
+        };
+
+        const handleWordClick = async (word, x, y) => {
+          console.log('[App] Word clicked:', word, 'at coords:', { x, y });
+
+          setPopupState({
+            visible: true,
+            x: x + 16,
+            y: y + 16,
+            word,
+            loading: true,
+            data: null,
+            error: null,
+          });
+
+          try {
+            console.log('[App] Fetching definition for:', word);
+            const definition = await fetchDefinition(word);
+
+            console.log('[App] Definition received:', definition);
+
+            setPopupState((prev) => ({
+              ...prev,
+              loading: false,
+              data: definition,
+            }));
+          } catch (err) {
+            console.error('[App] Error fetching definition:', err);
+
+            if (err instanceof Error && err.message === 'Invalid word format') {
+              setPopupState({
+                visible: false,
+                x: 0,
+                y: 0,
+                word: '',
+                loading: false,
+                data: null,
+                error: null,
+              });
+              return;
+            }
+
+            setPopupState((prev) => ({
+              ...prev,
+              loading: false,
+              error: err instanceof Error ? err.message : 'Failed to fetch definition',
+            }));
+          }
+        };
+
+        const handleClosePopup = () => {
+          setPopupState({
+            visible: false,
+            x: 0,
+            y: 0,
+            word: '',
+            loading: false,
+            data: null,
+            error: null,
+          });
+        };
+
+        return (
+          <div className="min-h-screen bg-gray-50">
+            <Header />
+
+            <main className="mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
+              {!pdfFile && <UploadZone onFileSelect={handleFileSelect} />}
+
+              <PdfViewer
+                file={pdfFile}
+                onWordClick={handleWordClick}
+                onClosePopup={handleClosePopup}
+              />
+
+              <InfoSection />
+            </main>
+
+            <DefinitionPopup
+              visible={popupState.visible}
+              x={popupState.x}
+              y={popupState.y}
+              word={popupState.word}
+              loading={popupState.loading}
+              data={popupState.data}
+              error={popupState.error}
+              onClose={handleClosePopup}
+            />
+          </div>
+        );
+      }
+
+      const root = ReactDOM.createRoot(document.getElementById('root'));
+      root.render(<App />);
+    </script>
+  </body>
+</html>
