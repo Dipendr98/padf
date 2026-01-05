@@ -182,32 +182,39 @@ export default function PdfViewer({ file, onWordClick, onClosePopup }: PdfViewer
     const textLayer = textLayerRef.current;
     const pdfDoc = pdfDocRef.current;
 
-  if (!canvas) {
-    console.log(`[PdfViewer] Render aborted - missing canvas for page ${pageNum}`);
-    return false;
-  }
-
-  if (!pdfDoc) {
-    console.log(`[PdfViewer] Render aborted - missing pdfDoc for page ${pageNum}`);
-    return false;
-  }
-
-  const ctx = canvas.getContext('2d');
-  if (!ctx) {
-    console.log(`[PdfViewer] Render aborted - canvas.getContext('2d') returned null for page ${pageNum}`);
-    return false;
-  }
-
-  console.log(`[PdfViewer] Starting render page ${pageNum} (token: ${localToken})`);
-
-  setRenderingPage(true);
-  cleanup();
-
-  // Hard reset text layer immediately
-  if (textLayer) {
-    while (textLayer.firstChild) {
-      textLayer.removeChild(textLayer.firstChild);
+    if (!canvas) {
+      console.log(`[PdfViewer] Render aborted - missing canvas for page ${pageNum}`);
+      return false;
     }
+
+    if (!pdfDoc) {
+      console.log(`[PdfViewer] Render aborted - missing pdfDoc for page ${pageNum}`);
+      return false;
+    }
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      console.log(`[PdfViewer] Render aborted - canvas.getContext('2d') returned null for page ${pageNum}`);
+      return false;
+    }
+
+    // Create a render token to detect stale renders
+    renderTokenRef.current += 1;
+    const localToken = renderTokenRef.current;
+
+    console.log(`[PdfViewer] Starting render page ${pageNum} (token: ${localToken})`);
+
+    setRenderingPage(true);
+    cleanup();
+
+    // Hard reset text layer immediately
+    if (textLayer) {
+      while (textLayer.firstChild) {
+        textLayer.removeChild(textLayer.firstChild);
+      }
+    }
+
+    try {
       const page = await pdfDoc.getPage(pageNum);
 
       // Check if stale
@@ -493,6 +500,7 @@ export default function PdfViewer({ file, onWordClick, onClosePopup }: PdfViewer
   }, [renderingPage, hasTextLayer, onWordClick]);
 
   return (
+    <>
     <section className="bg-white rounded-lg shadow-md overflow-hidden">
       <div className="bg-gray-100 px-4 sm:px-6 py-3 border-b border-gray-200">
         <p className="text-sm font-medium text-gray-700">
@@ -625,5 +633,6 @@ export default function PdfViewer({ file, onWordClick, onClosePopup }: PdfViewer
         )}
       </div>
     </div>
+    </>
   );
 }
